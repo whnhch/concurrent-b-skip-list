@@ -7,6 +7,11 @@
 using namespace std;
 class Block;
 
+typedef struct ReaderWriterLock {
+    volatile int writer;
+    volatile int64_t* readers;
+} ReaderWriterLock;
+
 class Node
 {
 public:
@@ -24,12 +29,17 @@ class Block
 public:
     std::vector<Node *> vector;
     Block *next; // Pointer to the next block at the same level
+    //Make new counters for reader and writer
+    ReaderWriterLock * lock = (ReaderWriterLock *) malloc(sizeof(ReaderWriterLock));
 
     Block(Node *node, Block *next)
     {
         vector.push_back(node);
         // vector.resize(3); // minimum size of each block
         this->next = next;
+        
+        //Initiailize the locks
+        rw_lock_init(lock);
     }
 
     Block(std::vector<Node *> vector, Block *next)
@@ -37,6 +47,9 @@ public:
         this->vector = vector;
         // vector.resize(3); // minimum size of each block
         this->next = next;
+        
+        //Initiailize the locks
+        rw_lock_init(lock);
     }
 
     void print()
@@ -50,6 +63,12 @@ public:
         }
         std::cout << "| ";
     }
+
+    void rw_lock_init(ReaderWriterLock *rwlock) {
+        rwlock->readers = (int64_t*)malloc(sizeof(int64_t) * 16);
+        rwlock->writer = 0;
+    }
+
 };
 
 class BSkipList
@@ -485,24 +504,24 @@ void test_range_query(BSkipList list, int start, int end)
     }
 }
 
-int main()
-{
-    BSkipList list;
-    list.insert(1);
-    list.insert(10);
-    list.insert(3);
-    list.insert(2);
-    list.insert(6);
-    list.insert(11);
-    list.insert(7);
-    list.print_list();
-    list.remove(7);
-    cout << "=========="<<endl;
-    // list.insert(8);
-    // list.insert(-1);
-    // std::cout << list.search(-1) << std::endl;
-    // std::cout << list.search(-2) << std::endl;
-    // std::cout << list.search(11) << std::endl;
-    list.print_list();
-    return 0;
-}
+// int main()
+// {
+//     BSkipList list;
+//     list.insert(1);
+//     list.insert(10);
+//     list.insert(3);
+//     list.insert(2);
+//     list.insert(6);
+//     list.insert(11);
+//     list.insert(7);
+//     list.print_list();
+//     list.remove(7);
+//     cout << "=========="<<endl;
+//     // list.insert(8);
+//     // list.insert(-1);
+//     // std::cout << list.search(-1) << std::endl;
+//     // std::cout << list.search(-2) << std::endl;
+//     // std::cout << list.search(11) << std::endl;
+//     list.print_list();
+//     return 0;
+// }
