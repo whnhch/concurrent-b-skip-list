@@ -22,6 +22,9 @@
 
 #include "benchmark.cpp"
 
+#define DEFAULT_TEST_NDISTINCT_KEYS (1ULL << 10)
+#define DEFAULT_TEST_NOPS (1ULL << 12)
+
 using namespace std;
 class Block;
 
@@ -33,6 +36,11 @@ typedef struct thread_args {
     uint * data;//data for query or inserting
     uint n_data;//num of entries
 } thread_args;
+
+typedef struct data_entry{
+    uint op_code; //op_code = 0 for query, 1 for insert, 2 for delete
+    uint value;
+} data_entry;
 
 typedef struct ReaderWriterLock {
     volatile int writer;
@@ -172,7 +180,7 @@ public:
         // ... (cleanup logic here)
     }
 
-    void insert(int value)
+    void* insert(void *args)
     {
         //let's flip the coin
         // vector<bool> coin_flip;
@@ -180,6 +188,9 @@ public:
         //     coin_flip.push_back(false)
         // }
         // coin_flip.push_back(true)
+
+        thread_args * my_args = (thread_args *) args;
+        int value = my_args->data->value;
 
         srand(time(NULL)); // initialize random seed
         std::stack<Block *> blocks = getBlockStack(value); //return block paths for value
@@ -200,7 +211,7 @@ public:
                     if ((static_cast<float>(rand()) / RAND_MAX) < P_FACTOR)
                     { // tail
                         //r = r + rand();
-                        writer_thread_routine(insert, block, new_val)
+                        writer_insert_thread_routine(my_args, block, new_val)
                         return;
                     }
                     else
@@ -234,7 +245,7 @@ public:
                 if ((static_cast<float>(rand()) / RAND_MAX) < P_FACTOR)
                 { // tail
                     r = r + 1;
-                    writer_thread_routine(insert, block, new_val, lower, -1)
+                    writer_thread_routine(my_args, block, new_val, lower, -1)
                     return;
                 }
                 else
@@ -255,8 +266,11 @@ public:
         }
     }
 
-    void remove(int value)
+    void* remove(void *args)
     {
+        thread_args * my_args = (thread_args *) args;
+        int value = my_args->data->value;
+
         std::stack<Block *> blocks = getBlockStack(value);
         Block *current;
         Block *block;
@@ -304,18 +318,17 @@ public:
                 if (block->vector[i]->value == value)
                 {
                     Block *downBlock = block->vector[i]->down;
-                    writer_thread_routine(args, block, 0, nullptr, i);
+                    writer_remove_thread_routine(my_args, block, 0, nullptr, i);
 
                     while (downBlock != nullptr)
                     {
                         current = downBlock->vector[0]->down;
-                        writer_thread_routine(args, downBlock->vector, 0, nullptr, i);
+                        writer_remove_thread_routine(my_args, downBlock->vector, 0, nullptr, i);
 
                         if(!downBlock->vector.empty()){
                             //Change writer_thread_routine could get all.
-                            writer_thread_routine(args, update[x], update[x]->vector.end()
-                            update[x]->vector.insert(update[x]->vector.end(), downBlock->vector.begin(),downBlock->vector.end());
-                            
+                            writer_remove_thread_routine(my_args, update[x], update[x]->vector.end(), downBlock->vector.begin(),downBlock->vector.end());
+                            // update[x]->vector.insert(update[x]->vector.end(), downBlock->vector.begin(),downBlock->vector.end());
                             update[x]->next = update[x]->next->next;
                             x++;
                         }else{
@@ -367,22 +380,27 @@ public:
         }
     }
 
-    bool search(int key)
+    bool* search(void *args)
     {
+        //read in args and determine cpuid
+        thread_args * my_args = (thread_args *) args;
+        uint key = my_args->data->n_data;
+
+        int cpuid = sched_getcpu();
+        
         std::vector<Node *>::iterator it;
         Node *node;
         Node *prev_node;
         Block *block = levels[levels.size() - 1];
 
-        
-
         while (block)
         {
             for (it = block->vector.begin(); it != block->vector.end(); ++it)
             {
+                reader_thread_routine(block, my_args)
                 node = *it;
                 if (node->value < key)
-                {
+                {                 
                     prev_node = node;
                     if (node == *std::prev(block->vector.end()))
                     {
@@ -538,69 +556,50 @@ void test_range_query(BSkipList list, int start, int end)
 //function used for reader threads
 //for each iter, the thread acquires the lock, records time,
 // and checks that a read/write hazard is not occuring
-bool *reader_thread_routine(void *args) {
+void reader_thread_routine(Block block, thread_args* args) {
 
     //read in args and determine cpuid
     thread_args * my_args = (thread_args *) args;
-
-    uint n_data = my_args->n_data;
-    uint * data = my_args->data;
+    ReaderWriterLock * lock = block->rwlock;
 
     int cpuid = sched_getcpu();
 
+    //timer measures delay in acquiring lock
+    // write duration to output as double.
+    std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
 
-    for (uint iter = 0; iter < n_iter; iter++){
+    read_lock(lock, cpuid);
 
-        //timer measures delay in acquiring lock
-        // write duration to output as double.
-        std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
+    std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
 
-        read_lock(lock, cpuid);
+    read_unlock(lock, cpuid);
 
-        std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
-
-        //NEED TO CHANGE
-        for (uint i = 0; i < n_data; i++){
-
-            return skiplist.query(data[i]);
-            // if (items[i]+1 != items[i+1]){
-            //     perror("Panic: Readers and Writers are both in lock.");
-            // }
-
-        }
-
-        read_unlock(lock, cpuid);
-
-        //write output outside of critical region
-        //*1000 to move to Milliseconds
-        my_args->duration[iter] = (std::chrono::duration_cast<std::chrono::duration<double>>(end-start)).count()*1000;
-
-
-    }
+    //write output outside of critical region
+    //*1000 to move to Milliseconds
+    my_args->duration[iter] = (std::chrono::duration_cast<std::chrono::duration<double>>(end-start)).count()*1000;
 
     return NULL;
 }
-
-
 
 //function used for writer threads
 //every iteration, acquires the lock and records the time
 // and increments the count of every item in the array by tid.
 // this will cause a race condition if your lock allows for readers/writers to enter simultaneously
-void *writer_thread_routine(void *args, Block* block, int new_val=0, Block* lower=nullptr, int offset=0) {
+void writer_insert_thread_routine(thread_args *args, Block* block, int new_val=0, Block* lower=nullptr, int offset=0) {
 
     //read in args
     thread_args * my_args = (thread_args *) args;
 
     ReaderWriterLock * lock = block->rwlock;
+    uint niters = my_args->niters;
+    uint nitems = my_args->nitems;
     uint tid = my_args->thread_id;
 
     uint n_data = my_args->n_data;
-    uint * data = my_args->data;
-
+    data_entry * data = my_args->data;
 
     uint * items = my_args->items;
-  
+
     //not needed for writers
     //int cpuid = sched_getcpu();
 
@@ -616,14 +615,54 @@ void *writer_thread_routine(void *args, Block* block, int new_val=0, Block* lowe
     uint offset = items[0];
 
     for (uint i = 0; i < n_data; i++){
-        //if op is insertion we only conisder when the coin toss is tail.
         if(offset==-1){
             block->vector.push_back(new Node(new_val, lower));
         }
         else{
             block->vector.insert(block->vector.begin() + offset, new Node(new_val, lower));
         }
+    }
 
+    write_unlock(lock);
+
+    //write output outside of critical region
+    //*1000 to move to Milliseconds
+    my_args->duration[iter] = (std::chrono::duration_cast<std::chrono::duration<double>>(end-start)).count()*1000;
+
+    return NULL;
+}
+
+void writer_remove_thread_routine(thread_args *args, Block* block, int new_val=0, Block* lower=nullptr, int offset=0) {
+    //read in args
+    thread_args * my_args = (thread_args *) args;
+
+    ReaderWriterLock * lock = block->rwlock;
+
+    uint niters = my_args->niters;
+    uint nitems = my_args->nitems;
+    uint tid = my_args->thread_id;
+
+    uint n_data = my_args->n_data;
+    data_entry * data = my_args->data;
+
+    uint * items = my_args->items;
+
+
+    //not needed for writers
+    //int cpuid = sched_getcpu();
+
+    //time lock acquisition
+    std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
+
+    write_lock(lock);
+
+    std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
+
+    //writer determines offset set by previous writers
+    //if this deviates, that means 2+ writers are in the lock.
+    uint offset = items[0];
+
+    for (uint i = 0; i < n_data; i++){
         //if op is deletion
         if(offset==-1){
             block->vector.erase(downBlock->vector.begin());
@@ -642,29 +681,107 @@ void *writer_thread_routine(void *args, Block* block, int new_val=0, Block* lowe
     return NULL;
 }
 
+void writer_remove_thread_routine(thread_args *args, Block* block, Node node1, Node node2, Node node3) {
+
+    //read in args
+    thread_args * my_args = (thread_args *) args;
+
+    ReaderWriterLock * lock = block->rwlock;
+    uint tid = my_args->thread_id;
+
+    //not needed for writers
+    //int cpuid = sched_getcpu();
+
+    //time lock acquisition
+    std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
+
+    write_lock(lock);
+
+    std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
+
+    //writer determines offset set by previous writers
+    //if this deviates, that means 2+ writers are in the lock.
+    uint offset = items[0];
+
+    for (uint i = 0; i < n_data; i++){
+        block->vector.insert(node1, node2,node3);
+        }
+
+    write_unlock(lock);
+
+    //write output outside of critical region
+    //*1000 to move to Milliseconds
+    my_args->duration[iter] = (std::chrono::duration_cast<std::chrono::duration<double>>(end-start)).count()*1000;
+
+    return NULL;
+}
+
+void parse_data_from_txt(std:string fname, data_entry * data){
+    std::ifstream file(fname);
+    if (!file.is_open()) {
+        std::cerr << "Error opening file: " << fname << std::endl;
+        return;
+    }
+
+    std::string operation;
+    unsigned int value;
+    size_t index = 0;
+
+    while (file >> operation >> value) {
+        if (operation == "query") {
+            data[index].op_code = 0;
+        } else if (operation == "insert") {
+            data[index].op_code = 1;
+        } else if (operation == "delete") {
+            data[index].op_code = 2;
+        } else {
+            perror("Invalid operation");
+            continue;
+        }
+        data[index].value = value;
+        index++;
+    }
+
+    file.close();
+}
+
 int main(int argc, char **argv) {
     if (argc != 6) {
         std::cout << "Usage: ./benchmark [num reader threads][num writer threads][num items][num iterations]\n";
         return 1;
     }
-    
-    //Create new b skip list
-    BSkipList list;
+
 
     //read inputs from command line
+    uint nreaders = atoi(argv[1]);
+    uint nwriters = atoi(argv[2]);
+    uint nitems = atoi(argv[3]);
+    uint niters = atoi(argv[4]);
+    uint n_data = atoi(argv[5]);
 
-    uint n_data = atoi(argv[1]);
-    uint nreaders = 1;
-    uint nwriters = 1;
 
-    if (n_data == 0){
+    
+    if (nreaders == 0 || nwriters == 0 || nitems == 0 || niters == 0 || n_data == 0){
         perror("All arguments must be > 0");
         return -1;
     }
 
 
-    // printf("Running benchmark with %u readers, %u writers, %u items, %u iterations, %u data entries\n", nreaders, nwriters, nitems, niters, n_data);
-    printf("Running benchmark with %%u data entries\n", n_data);
+    printf("Running benchmark with %u readers, %u writers, %u items, %u iterations, %u data entries\n", nreaders, nwriters, nitems, niters, n_data);
+
+    //init the array of items, arr[i] = i;
+    uint * items = (uint *) malloc(nitems*sizeof(uint));
+
+    if (items == NULL){
+        perror("Malloc items");
+        return -1;
+    }
+
+    for (uint i = 0; i < nitems; i++){
+        items[i] = i;
+    }
+
+
 
     //output buffer for reader threads
     //each iteration outputs one double of duration per thread
@@ -676,6 +793,7 @@ int main(int argc, char **argv) {
         return -1;
     }
 
+
     //init reader args
     thread_args * reader_args = (thread_args *) malloc(nreaders*sizeof(thread_args));
 
@@ -685,12 +803,14 @@ int main(int argc, char **argv) {
     }
 
     for (uint i = 0; i < nreaders; i++){
-
+        reader_args[i].nitems = nitems;
+        reader_args[i].niters = niters;
         reader_args[i].thread_id = i;
+        reader_args[i].items = items;
         reader_args[i].duration = reader_output + (i*niters);
-        reader_args[i].op = 0;
+
         reader_args[i].n_data = n_data;
-        reader_args[i].data = (uint *) malloc(n_data*sizeof(uint));
+        reader_args[i].data = (data_entry *) malloc(n_data*sizeof(data_entry));
         parse_data_from_txt("readers_"+std::to_string(i)+".txt", reader_args[i].data);
     }
 
@@ -701,6 +821,9 @@ int main(int argc, char **argv) {
         return -1;
     }
 
+
+
+
     //initialize writers/writer output in same fashion as readers.
     double * writer_output = (double *) malloc(nwriters*niters*sizeof(double));
 
@@ -708,6 +831,7 @@ int main(int argc, char **argv) {
         perror("Malloc writer output");
         return -1;
     }
+
 
 
     //init writer args + writers
@@ -719,11 +843,13 @@ int main(int argc, char **argv) {
     }
 
     for (uint i = 0; i < nwriters; i++){
-
+       writer_args[i].nitems = nitems;
+       writer_args[i].niters = niters;
        writer_args[i].thread_id = i;
+       writer_args[i].items = items;
        writer_args[i].duration = writer_output + (i*niters);
-       writer_args[i].op = 1; // if op is 2 then deletion
        
+       writer_args[i].n_data = n_data;
        writer_args[i].data = (uint *) malloc(n_data*sizeof(uint));
        parse_data_from_txt("writers"+std::to_string(i)+".txt", writer_args[i].data);
     }
@@ -735,11 +861,12 @@ int main(int argc, char **argv) {
         return -1;
     }
 
+    BSkipList list;
 
     //setup done, spawn threads
     for (uint i = 0; i < nreaders; i++){
 
-        if (pthread_create(&readers[i], NULL, reader_thread_routine, (void *)&reader_args[i])){
+        if (pthread_create(&readers[i], NULL, list.search, (void *)&reader_args[i])){
 
             perror("pthread_create");
             return -1;
@@ -747,17 +874,27 @@ int main(int argc, char **argv) {
         }
 
     }
-
+    //just make a one more writer for deletion or distinguish inside of the file (iserting, deletion x)
     for (uint i = 0; i < nwriters; i++){
+        if(writer_args[i] == 1){
+            if (pthread_create(&writers[i], NULL, list.insert, (void *)&writer_args[i])){
 
-        if (pthread_create(&writers[i], NULL, writer_thread_routine, (void *)&writer_args[i])){
+                perror("pthread_create");
+                return -1;
 
-            perror("pthread_create");
-            return -1;
+            }
+            else{
+                if (pthread_create(&writers[i], NULL, list.remove, (void *)&writer_args[i])){
 
+                    perror("pthread_create");
+                    return -1;
+
+                }
+            }
         }
 
     }
+
 
     //join threads
     //in reverse order to try and force a collision between reader/writer threads.
@@ -788,8 +925,8 @@ int main(int argc, char **argv) {
     printf("Writers: min %f ms, max %f ms, mean %f ms, std_dev %f\n", writer_min, writer_max, writer_mean, writer_std_dev);
 
 
-
     //cleanup
+    free(lock);
 
     free(reader_output);
     free(reader_args);
@@ -809,6 +946,5 @@ int main(int argc, char **argv) {
         free(writer_args[i].data);
     }
     
-
     return 0;
 }
