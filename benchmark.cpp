@@ -1,22 +1,16 @@
-#include <iostream>
 #include <chrono>
 #include <random>
-#include <cstring>
 #include <vector>
 #include <fstream>
 #include <iostream>
-#include <stdlib.h>
 #include <atomic>
 #include <thread>
 #include <cstdlib>
 #include <pthread.h>
 #include <sched.h>
 #include <math.h>
-#include <string>
-
 
 #include "lock.h"
-
 
 /******************
 
@@ -39,27 +33,12 @@ implementation concurrently.
 ******************/
 
 
-//Thread args is the struct passed
-typedef struct thread_args {
-    ReaderWriterLock * rwlock;
-    uint niters;
-    uint nitems;
-    uint thread_id; 
-    uint * items;
-    double * duration;
-
-    uint * data;//data for query or inserting
-    uint n_data;//num of entries
-} thread_args;
-
-
-
 //helpers for stats
-double calculate_mean(double * items, uint nitems){
+double calculate_mean(double * items, int nitems){
 
     double sum = 0;
 
-    for (uint i = 0; i < nitems; i++){
+    for (int i = 0; i < nitems; i++){
 
         sum += items[i];
 
@@ -70,12 +49,12 @@ double calculate_mean(double * items, uint nitems){
 
 }
 
-double calculate_std_dev(double * items, double mean, uint nitems){
+double calculate_std_dev(double * items, double mean, int nitems){
 
 
     double sum = 0;
 
-    for (uint i = 0; i < nitems; i++){
+    for (int i = 0; i < nitems; i++){
 
         sum += pow(items[i] - mean, (double) 2);
 
@@ -86,11 +65,11 @@ double calculate_std_dev(double * items, double mean, uint nitems){
 }
 
 
-double calculate_min(double * items, uint nitems){
+double calculate_min(double * items, int nitems){
 
     double min = items[0];
 
-    for (uint i=1; i < nitems; i++){
+    for (int i=1; i < nitems; i++){
 
 
         if (items[i] < min){
@@ -102,11 +81,11 @@ double calculate_min(double * items, uint nitems){
 
 }
 
-double calculate_max(double * items, uint nitems){
+double calculate_max(double * items, int nitems){
 
     double max = items[0];
 
-    for (uint i=1; i < nitems; i++){
+    for (int i=1; i < nitems; i++){
 
 
         if (items[i] > max){
@@ -118,21 +97,21 @@ double calculate_max(double * items, uint nitems){
 
 }
 
-void parse_data_from_txt(std:string fname, uint * data){
-    std::ifstream file(fname);
-    if (!file.is_open()) {
-        std::cerr << "Error opening file: " << fname << std::endl;
-        return;
-    }
+// void parse_data_from_txt(std:string fname, int * data){
+//     std::ifstream file(fname);
+//     if (!file.is_open()) {
+//         std::cerr << "Error opening file: " << fname << std::endl;
+//         return;
+//     }
 
-    unsigned int num;
-    size_t index = 0;
-    while (file >> num) {
-        data[index++] = num;
-    }
+//     unsigned int num;
+//     size_t index = 0;
+//     while (file >> num) {
+//         data[index++] = num;
+//     }
 
-    file.close();
-}
+//     file.close();
+// }
 
 // int main(int argc, char **argv) {
 //     if (argc != 6) {
@@ -144,11 +123,11 @@ void parse_data_from_txt(std:string fname, uint * data){
 //     BSkipList list;
 
 //     //read inputs from command line
-//     uint nreaders = atoi(argv[1]);
-//     uint nwriters = atoi(argv[2]);
-//     uint nitems = atoi(argv[3]);
-//     uint niters = atoi(argv[4]);
-//     uint n_data = atoi(argv[5]);
+//     int nreaders = atoi(argv[1]);
+//     int nwriters = atoi(argv[2]);
+//     int nitems = atoi(argv[3]);
+//     int niters = atoi(argv[4]);
+//     int n_data = atoi(argv[5]);
 
 
 
@@ -174,14 +153,14 @@ void parse_data_from_txt(std:string fname, uint * data){
 
 
 //     //init the array of items, arr[i] = i;
-//     uint * items = (uint *) malloc(nitems*sizeof(uint));
+//     int * items = (int *) malloc(nitems*sizeof(uint));
 
 //     if (items == NULL){
 //         perror("Malloc items");
 //         return -1;
 //     }
 
-//     for (uint i = 0; i < nitems; i++){
+//     for (int i = 0; i < nitems; i++){
 //         items[i] = i;
 //     }
 
@@ -206,7 +185,7 @@ void parse_data_from_txt(std:string fname, uint * data){
 //         return -1;
 //     }
 
-//     for (uint i = 0; i < nreaders; i++){
+//     for (int i = 0; i < nreaders; i++){
 
 //         reader_args[i].rwlock = lock;
 //         reader_args[i].nitems = nitems;
@@ -216,7 +195,7 @@ void parse_data_from_txt(std:string fname, uint * data){
 //         reader_args[i].duration = reader_output + (i*niters);
 
 //         reader_args[i].n_data = n_data;
-//         reader_args[i].data = (uint *) malloc(n_data*sizeof(uint));
+//         reader_args[i].data = (int *) malloc(n_data*sizeof(uint));
 //         parse_data_from_txt("readers_"+std::to_string(i)+".txt", reader_args[i].data);
 //     }
 
@@ -245,7 +224,7 @@ void parse_data_from_txt(std:string fname, uint * data){
 //         return -1;
 //     }
 
-//     for (uint i = 0; i < nwriters; i++){
+//     for (int i = 0; i < nwriters; i++){
 
 //        writer_args[i].rwlock = lock;
 //        writer_args[i].nitems = nitems;
@@ -255,7 +234,7 @@ void parse_data_from_txt(std:string fname, uint * data){
 //        writer_args[i].duration = writer_output + (i*niters);
        
 //        writer_args[i].n_data = n_data;
-//        writer_args[i].data = (uint *) malloc(n_data*sizeof(uint));
+//        writer_args[i].data = (int *) malloc(n_data*sizeof(uint));
 //        parse_data_from_txt("writers"+std::to_string(i)+".txt", writer_args[i].data);
 //     }
 
@@ -268,7 +247,7 @@ void parse_data_from_txt(std:string fname, uint * data){
 
 
 //     //setup done, spawn threads
-//     for (uint i = 0; i < nreaders; i++){
+//     for (int i = 0; i < nreaders; i++){
 
 //         if (pthread_create(&readers[i], NULL, reader_thread_routine, (void *)&reader_args[i])){
 
@@ -279,7 +258,7 @@ void parse_data_from_txt(std:string fname, uint * data){
 
 //     }
 
-//     for (uint i = 0; i < nwriters; i++){
+//     for (int i = 0; i < nwriters; i++){
 
 //         if (pthread_create(&writers[i], NULL, writer_thread_routine, (void *)&writer_args[i])){
 
@@ -293,11 +272,11 @@ void parse_data_from_txt(std:string fname, uint * data){
 
 //     //join threads
 //     //in reverse order to try and force a collision between reader/writer threads.
-//     for (uint i = 0; i < nwriters; i++){
+//     for (int i = 0; i < nwriters; i++){
 //         pthread_join(writers[i], NULL);
 //     }
 
-//     for (uint i = 0; i < nreaders; i++){
+//     for (int i = 0; i < nreaders; i++){
 //         pthread_join(readers[i], NULL);
 //     }
 
@@ -335,10 +314,10 @@ void parse_data_from_txt(std:string fname, uint * data){
 
 //     free(items);
     
-//     for (uint i = 0; i < nreaders; i++){
+//     for (int i = 0; i < nreaders; i++){
 //         free(reader_args[i].data);
 //     }
-//     for (uint i = 0; i < nwriters; i++){
+//     for (int i = 0; i < nwriters; i++){
 //         free(writer_args[i].data);
 //     }
     
