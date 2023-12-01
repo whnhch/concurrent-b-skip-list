@@ -39,6 +39,7 @@ typedef struct thread_args {
 
     data_entry * data;//data for query or inserting
     int n_data;//num of entries
+    int value;
 
 } thread_args;
 
@@ -85,7 +86,7 @@ public:
         this->next = next;
         
         //Initiailize the locks
-        rw_lock_init(lock);
+        rw_lock_init(this->lock);
     }
 
     Block(std::vector<Node *> vector, Block *next)
@@ -95,7 +96,7 @@ public:
         this->next = next;
         
         //Initiailize the locks
-        rw_lock_init(lock);
+        rw_lock_init(this->lock);
     }
 
     void print()
@@ -330,18 +331,18 @@ public:
         // ... (cleanup logic here)
     }
 
-    void insert(pthread_t * writer, void *args)
+    int insert(pthread_t * writer, thread_args *my_args)
     {
         //let's flip the coin
         // vector<bool> coin_flip;
         // while((static_cast<float>(rand()) / RAND_MAX) >= P_FACTOR){
         //     coin_flip.push_back(false)
         // }
-        // coin_flip.push_back(true)
-        writeThreadParams* param;
-        thread_args * my_args = (thread_args *) args;
+        // coin_flip.push_back(true);
+        writeThreadParams* param = (writeThreadParams *) malloc(sizeof(writeThreadParams));
         param->args = my_args;
-        int value = my_args->data->value;
+
+        int value = my_args->value;
         param->value = value;
 
         srand(time(NULL)); // initialize random seed
@@ -349,7 +350,7 @@ public:
         Block *lower = nullptr;
         // building block from botton
 
-        while (!blocks.empty())
+       while (!blocks.empty())
         {
             bool inserted = false;
             Block *block = blocks.top(); //from bottom
@@ -367,8 +368,11 @@ public:
                         param->block = block;
                         param->lower = lower;
                         param->offset= i;
-                        pthread_create(writer, NULL, writer_insert_thread_routine, (void *)param);
-                        return;
+                        if (pthread_create(writer, NULL, writer_insert_thread_routine, (void *)param)){
+                            perror("pthread_create");
+                            return -1;
+                        }
+                        return 1;
                     }
                     else
                     { // head
@@ -404,8 +408,12 @@ public:
                     param->block = block;
                     param->lower = lower;
                     param->offset= -1;
-                    pthread_create(writer, NULL, writer_insert_thread_routine, (void *)param);
-                    return;
+
+                    if (pthread_create(writer, NULL, writer_insert_thread_routine, (void *)param)){
+                        perror("pthread_create");
+                        return -1;
+                    }
+                    return 1;
                 }
                 else
                 { // head
@@ -423,15 +431,16 @@ public:
                 }
             }
         }
-        return;
+        return 1;
     }
 
-    void remove(pthread_t * writer, void *args)
+    int remove(pthread_t * writer, thread_args *my_args)
     {
-        writeThreadParams* param;
-        thread_args * my_args = (thread_args *) args;
+        writeThreadParams* param = (writeThreadParams *) malloc(sizeof(writeThreadParams));
         param->args = my_args;
-        int value = my_args->data->value;
+
+        int value = my_args->value;
+        param->value = value;
 
         std::stack<Block *> blocks = getBlockStack(value);
         Block *current;
@@ -439,6 +448,8 @@ public:
         vector<Block *> update;
         Block *curr = nullptr;
         bool flag = false;
+        cout << "I made param variable" << endl;
+
         for (int i = levels.size() - 1; i >= 0; i--)
         {
             Block *pre = nullptr;
@@ -483,7 +494,10 @@ public:
                     
                     param->block = block;
                     param->offset= i;
-                    pthread_create(writer, NULL, writer_remove_thread_routine, (void *)param);
+                    if (pthread_create(writer, NULL, writer_remove_thread_routine, (void *)param)){
+                        perror("pthread_create");
+                        return -1;
+                    }
 
                     while (downBlock != nullptr)
                     {
@@ -498,7 +512,10 @@ public:
                             param-> it1 = update[x]->vector.end();
                             param-> it2 = downBlock->vector.begin();
                             param-> it3 = downBlock->vector.end();
-                            pthread_create(writer, NULL, writer_remove_thread_routine, (void *)param);
+                            if (pthread_create(writer, NULL, writer_remove_thread_routine, (void *)param)){
+                                perror("pthread_create");
+                                return -1;
+                            }
                             // update[x]->vector.insert(update[x]->vector.end(), downBlock->vector.begin(),downBlock->vector.end());
                             update[x]->next = update[x]->next->next;
                             x++;
@@ -512,7 +529,7 @@ public:
                 }
             }
         }
-        return;
+        return 1;
     }
 
     void print_list(){
@@ -552,14 +569,13 @@ public:
         }
     }
 
-    bool search(pthread_t * reader, void *args)
+    bool search(pthread_t * reader, thread_args *my_args)
     {
-        //read in args and determine cpuid
-        readThreadParams* param;
-        thread_args * my_args = (thread_args *) args;
+        readThreadParams* param = (readThreadParams *) malloc(sizeof(readThreadParams));
+
         param->args = my_args;
 
-        int key = my_args->data->value;
+        int key = my_args->value;
 
         int cpuid = sched_getcpu();
         
@@ -573,8 +589,10 @@ public:
             for (it = block->vector.begin(); it != block->vector.end(); ++it)
             {
                 param->block = block;
-                pthread_create(reader, NULL, reader_thread_routine, (void *)param);
-
+                if (pthread_create(reader, NULL, reader_thread_routine, (void *)param)){
+                    perror("pthread_create");
+                    return false;
+                }
                 node = *it;
                 if (node->value < key)
                 {                 
@@ -728,7 +746,7 @@ void parse_data_from_txt(string fname, data_entry * data){
 
 int main(int argc, char **argv) {
     if (argc != 6) {
-        std::cout << "Usage: ./benchmark [num reader threads][num writer threads][num items][num iterations]\n";
+        std::cout << "Usage: ./BSkipList [num reader threads][num writer threads][num items][num iterations][reader_data][writer_data]\n";
         return 1;
     }
 
@@ -774,7 +792,6 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-
     //init reader args
     thread_args * reader_args = (thread_args *) malloc(nreaders*sizeof(thread_args));
 
@@ -801,9 +818,6 @@ int main(int argc, char **argv) {
         perror("Malloc readers");
         return -1;
     }
-
-
-
 
     //initialize writers/writer output in same fashion as readers.
     double * writer_output = (double *) malloc(nwriters*niters*sizeof(double));
@@ -843,25 +857,30 @@ int main(int argc, char **argv) {
     }
 
     BSkipList list;
-    // list.insert(1);
-    // list.insert(10);
-    // list.insert(50);
-    // list.insert(60);
-    // list.insert(70);
 
     //setup done, spawn threads
     for (int i = 0; i < nreaders; i++){
-        list.search(&readers[i], &reader_args[i]);
+        for (int j = 0; j < n_data; j++){
+            reader_args[i].value = reader_args[i].data[j].value;
+            list.search(&readers[i], &reader_args[i]);
+        }
     }
+
     //just make a one more writer for deletion or distinguish inside of the file (iserting, deletion x)
     for (int i = 0; i < nwriters; i++){
-        if(writer_args[i].data->op_code == 1){
+        for (int j = 0; j < n_data; j++){
+            writer_args[i].value = writer_args[i].data[j].value;
+
+            if(writer_args[i].data[j].op_code == 1){
+                cout << "Start inserting value: " << writer_args[i].value << endl;
                 list.insert(&writers[i], &writer_args[i]);
+                list.print_list();
             }
-            
-        else{
-            list.remove(&writers[i], &writer_args[i]);
+            else{
+                cout << "Start removing value: " << writer_args[i].value << endl;
+                list.remove(&writers[i], &writer_args[i]);
             }
+        }
     }
 
     //join threads
