@@ -623,6 +623,49 @@ public:
         return false;
     }
 
+    bool validate(){
+        Block* curr;
+        for (int i = levels.size() - 1; i >= 0; i--)
+        {
+            Block *pre = nullptr;
+            curr = levels[i];
+            while (curr)
+            {
+                //check if the block is empty
+                if(curr->vector.empty()){
+                    return false;
+                }
+
+                for (int j = 0; j < curr->vector.size(); j++)
+                {
+                    //check if the value is same as the value of the down block
+                    if(curr->vector[j]->down){
+                        if(!(curr->vector[j]->value == curr->vector[j]->down->vector[0]->value)){
+                            return false;
+                        }
+                    }
+
+                    //check if the value is ascending order
+                    if(j>0){
+                        if(!(curr->vector[j-1]->value > curr->vector[j]->value)){
+                            return false;
+                        }
+                    }   
+                }
+
+                //check if the next block is ascending order
+                if(curr->next){
+                    if(!(curr->vector[curr->vector.size()-1]->value < curr->next->vector[0]->value)){
+                        return false;
+                    }
+                }
+
+                curr = curr->next;
+            }
+        }
+        return true;
+    }
+
     std::vector<bool> range_query(int _start_key, int _end_key) {
         int start_key = _start_key;
         int end_key = _end_key;
@@ -892,7 +935,8 @@ int main(int argc, char **argv) {
     for (int i = 0; i < nreaders; i++){
         pthread_join(readers[i], NULL);
     }
-
+    // validate bskip list
+    bool is_valid = list.validate();
 
     //finally, calculate and print stats.
     printf("Threads done, stats:\n");
