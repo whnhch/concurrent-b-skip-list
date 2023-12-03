@@ -177,7 +177,6 @@ void* writer_insert_thread_routine(void *args) {
 
     //not needed for writers
     int cpuid = sched_getcpu();
-    cout << "currnet cpu id " << cpuid << endl;
     //time lock acquisition
     std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
 
@@ -508,7 +507,6 @@ public:
                 if (block->vector[i]->value == value)
                 {
                     Block *downBlock = block->vector[i]->down;
-                    cout<< "created down block" <<endl;
                     param->block = block;
                     param->offset= i;
                     if (writer_remove_thread_routine,((void *)param)){
@@ -542,7 +540,6 @@ public:
 
                         }else{
                             update[x]->next = update[x]->next->next;
-                            cout<< "no remove 3" <<endl;
                             x++;
                         }
                         downBlock = current;
@@ -917,7 +914,7 @@ int main(int argc, char **argv) {
                     return -1;
                 }            
             }
-            
+
             else{
                 cout << "Start removing value: " << writer_args[i].value << endl;
                 if (pthread_create(&writers[i], NULL, DeleteThread, (void *)threadWrapper)){
