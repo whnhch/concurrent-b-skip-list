@@ -23,6 +23,7 @@ using namespace std;
 class Block;
 class Node;
 
+
 typedef struct data_entry{
     int op_code; //op_code = 0 for query, 1 for insert, 2 for delete
     int value;
@@ -119,6 +120,11 @@ public:
 };
 
 
+void timer_thread(int test_duration) {
+    // Pause the thread for the duration of the test
+    std::this_thread::sleep_for(std::chrono::seconds(test_duration));
+}
+
 //function used for reader threads
 //for each iter, the thread acquires the lock, records time,
 // and checks that a read/write hazard is not occuring
@@ -140,10 +146,10 @@ void* reader_thread_routine(void* args) {
 
     read_unlock(lock, cpuid);
 
+
     //write output outside of critical region
     //*1000 to move to Milliseconds
     my_args->args->duration[0] = (std::chrono::duration_cast<std::chrono::duration<double>>(end-start)).count()*1000;
-
     return NULL;
 }
 //every iteration, acquires the lock and records the time
@@ -197,7 +203,6 @@ void* writer_insert_thread_routine(void *args) {
     //write output outside of critical region
     //*1000 to move to Milliseconds
     my_args->duration[0] = (std::chrono::duration_cast<std::chrono::duration<double>>(end-start)).count()*1000;
-
     return NULL;
 }
 
@@ -252,7 +257,6 @@ void* writer_remove_thread_routine(void *args) {
     //write output outside of critical region
     //*1000 to move to Milliseconds
     my_args->duration[0] = (std::chrono::duration_cast<std::chrono::duration<double>>(end-start)).count()*1000;
-
     return NULL;
 }
 
@@ -431,6 +435,7 @@ public:
                 }
             }
         }
+        operations_completed.fetch_add(1, std::memory_order_relaxed);
         return 1;
     }
 
@@ -529,6 +534,7 @@ public:
                 }
             }
         }
+        operations_completed.fetch_add(1, std::memory_order_relaxed);
         return 1;
     }
 
@@ -620,6 +626,7 @@ public:
             }
         }
         // }
+        operations_completed.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -787,6 +794,9 @@ void parse_data_from_txt(string fname, data_entry * data){
     file.close();
 }
 
+
+std::atomic<int> operations_completed(0);
+
 int main(int argc, char **argv) {
     if (argc != 6) {
         std::cout << "Usage: ./BSkipList [num reader threads][num writer threads][num items][num iterations][reader_data][writer_data]\n";
@@ -899,9 +909,12 @@ int main(int argc, char **argv) {
         return -1;
     }
 
+
+
     BSkipList list;
 
     //setup done, spawn threads
+    auto start_time = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < nreaders; i++){
         for (int j = 0; j < n_data; j++){
             reader_args[i].value = reader_args[i].data[j].value;
@@ -925,7 +938,7 @@ int main(int argc, char **argv) {
             }
         }
     }
-
+    
     //join threads
     //in reverse order to try and force a collision between reader/writer threads.
     for (int i = 0; i < nwriters; i++){
@@ -935,6 +948,13 @@ int main(int argc, char **argv) {
     for (int i = 0; i < nreaders; i++){
         pthread_join(readers[i], NULL);
     }
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+    double throughput = operations_completed.load() / elapsed.count(); 
+    std::cout << "Throughput: " << throughput << " operations per second." << std::endl;
+
+
+    
     // validate bskip list
     bool is_valid = list.validate();
 
