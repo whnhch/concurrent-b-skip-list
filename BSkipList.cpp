@@ -1035,7 +1035,6 @@ int main(int argc, char **argv) {
     free(writer_args);
     free(writers);
 
-
     free(items);
     
     for (int i = 0; i < nreaders; i++){
