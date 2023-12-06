@@ -9,7 +9,7 @@
 //init the lock
 // called by the thread running the benchmark before any child threads are spawned.
 void rw_lock_init(ReaderWriterLock *rwlock) {
-  rwlock->readers = (int64_t*)malloc(sizeof(int64_t) * 16);
+  rwlock->readers = (int*)malloc(sizeof(int) * 16);
   //memset(rwlock->readers, 0, sizeof(rwlock->readers));
   rwlock->writer = 0;
 }
@@ -53,11 +53,12 @@ void read_unlock(ReaderWriterLock *rwlock, uint8_t thread_id) {
  */
 void write_lock(ReaderWriterLock *rwlock) {
   // acquire write lock.
-  while (__sync_lock_test_and_set(&rwlock->writer, 1))
+  while (__sync_lock_test_and_set(&rwlock->writer, 1)){
     while (rwlock->writer != 0);
+  }
   //once acquired, wait on readers
   for(int i = 0; i < NUM_COUNTERS; i++){ 
-    while (rwlock->readers[0] > 0);
+    while (rwlock->readers[i] > 0);
   }
   return;
 }

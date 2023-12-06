@@ -1,1 +1,1 @@
-insert 7
+delete 2

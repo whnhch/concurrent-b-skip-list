@@ -24,7 +24,6 @@ using namespace std;
 class Block;
 class Node;
 class BSkipList;
-#define NUM_COUNTERS 16
 
 //Thread args is the struct passed
 typedef struct thread_args {
@@ -83,7 +82,7 @@ public:
         this->next = next;
         
         //Initiailize the locks
-        rw_lock_init();
+        rw_lock_init(this->lock);
     }
 
     Block(std::vector<Node *> vector, Block *next)
@@ -93,7 +92,7 @@ public:
         this->next = next;
         
         //Initiailize the locks
-        rw_lock_init();
+        rw_lock_init(this->lock);
     }
 
     void print()
@@ -108,80 +107,14 @@ public:
         std::cout << "| ";
     }
 
-    void rw_lock_init() {
-        this->lock->readers = (int64_t*)malloc(sizeof(int64_t) * NUM_COUNTERS);
-        this->lock->writer = 0;
-        for(int i = 0; i < NUM_COUNTERS; i++){ 
-            this->lock->readers[i] = 0;
-        }
+    void rw_lock_init(ReaderWriterLock *rwlock) {
+        rwlock->readers = (int64_t*)malloc(sizeof(int64_t) * NUM_COUNTERS);
+        rwlock->writer = 0;
     }
 
     bool r_lock_check(int thread_id) {
-        return this->lock->readers[thread_id]>0;
+        return lock->readers[thread_id]>0;
     }
-
-    bool w_lock_check() {
-        return this->lock->writer>0;
-    }
-
-    void read_lock(int thread_id) {
-        if(!r_lock_check(thread_id)) read_lock(this->lock, thread_id);
-    }
-    void read_unlock(int thread_id) {
-        if(r_lock_check(thread_id)) read_unlock(this->lock, thread_id);
-    }
-
-    void write_lock(void) {
-        if(!w_lock_check()) write_lock(this->lock);
-    }
-    void write_unlock(void) {
-        if(w_lock_check()) write_unlock(this->lock);
-    }
-
-    void read_lock(ReaderWriterLock *rwlock, uint8_t thread_id) {
-        //acq read lock
-        while (true){
-
-            //atomic_add_fetch returns current value, but not needed
-            __atomic_add_fetch(&rwlock->readers[thread_id], 1, __ATOMIC_SEQ_CST);
-
-            if (rwlock->writer){
-            //cancel
-            __atomic_add_fetch(&rwlock->readers[thread_id], -1, __ATOMIC_SEQ_CST);
-            //wait
-            while (rwlock->writer);
-            } else {
-            return;
-            }
-        }
-    }
-
-
-    //release an acquired read lock for thread `thread_id`
-    void read_unlock(ReaderWriterLock *rwlock, uint8_t thread_id) {
-        __atomic_add_fetch(&rwlock->readers[thread_id], -1, __ATOMIC_SEQ_CST);
-        return;
-    }
-
-    void write_lock(ReaderWriterLock *rwlock) {
-        // acquire write lock.
-        while (__sync_lock_test_and_set(&rwlock->writer, 1)){
-            while (rwlock->writer != 0);
-        }
-        //once acquired, wait on readers
-        for(int i = 0; i < NUM_COUNTERS; i++){ 
-            while (rwlock->readers[i] != 0);
-        }
-        return;
-    }
-
-    //Release an acquired write lock.
-    void write_unlock(ReaderWriterLock *rwlock) {
-        __atomic_add_fetch(&rwlock->writer, -1, __ATOMIC_SEQ_CST);
-        // __sync_lock_release(&rwlock->writer);
-        return;
-    }
-
 };
 
 std::atomic<int> operations_completed(0);
@@ -234,12 +167,11 @@ void writer_insert_thread_routine(void *args) {
     int new_val = w_args->value;
 
     //not needed for writers
-    // int cpuid = sched_getcpu();
+    int cpuid = sched_getcpu();
     //time lock acquisition
-
     std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
 
-    block->write_lock();
+    write_lock(lock);
 
     std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
 
@@ -261,7 +193,7 @@ void writer_insert_thread_routine(void *args) {
         block->vector.insert(block->vector.begin() + offset, new Node(new_val, lower));
     }
 
-    block->write_unlock();
+    write_unlock(lock);
 
     //write output outside of critical region
     //*1000 to move to Milliseconds
@@ -339,29 +271,31 @@ public:
         // Destructor to free memory
         // ... (cleanup logic here)
     }
-std::pair<std::stack<Block *>, std::vector<bool>> getBlockStack(int value, int cpuid)
-    {
 
+    std::pair<std::stack<Block *>, std::vector<bool>> getBlockStack(int value, int cpuid)
+    {
         srand(time(NULL)); // initialize random seed
 
         std::vector<bool> coin_flip;
         while((static_cast<float>(rand()) / RAND_MAX) >= 0.25){
             coin_flip.push_back(false);
-            if(coin_flip.size() >= this->levels.size()+10000){break;}
+            if(coin_flip.size() >= levels.size()+10000){break;}
         }
         coin_flip.push_back(true);
 
-        int lvl = this->levels.size() - 1;
-        Block *current = this->levels[this->levels.size() - 1]; // starting from first block in higest level
+        int lvl = levels.size() - 1;
+        Block *current = levels[levels.size() - 1]; // starting from first block in higest level
         std::stack<Block *> blocks;                 // store the path
         Block *block = current;                     // keep track the place for value
         Node *prev;
-        current->read_lock(cpuid);
+
+        read_lock(current->lock, cpuid);
 
         while (current)
         {
             bool found = false;
             // find a value greater than insert value
+            // if(ind>=coin_flip.size()) break;
 
             for (unsigned int i = 0; i < current->vector.size(); i++)
             {
@@ -371,13 +305,16 @@ std::pair<std::stack<Block *>, std::vector<bool>> getBlockStack(int value, int c
                 }
                 else
                 { // find the place
-                    block->read_lock(cpuid);
-                    // block->write_lock();
-                    blocks.push((block));
-                    if(current && block != current) current->read_unlock(cpuid); 
-                    current = prev->down;
-                    if(current) current->read_lock(cpuid); 
+                    if(!coin_flip[lvl] && block->r_lock_check(cpuid)) read_unlock(block->lock, cpuid);
+                    if(coin_flip[lvl]) write_lock(block->lock);
+                    else if(block!=current && block->r_lock_check(cpuid)) read_lock(block->lock, cpuid);
 
+                    blocks.push((block));
+                    
+                    if(block!=current) read_unlock(current->lock, cpuid);
+                    current = prev->down;
+                    if(current) read_lock(current->lock, cpuid);
+                    
                     lvl--;
                     block = current;
                     found = true;
@@ -390,53 +327,45 @@ std::pair<std::stack<Block *>, std::vector<bool>> getBlockStack(int value, int c
                 // keep looking in next block
                 if (current->next)
                 {
-                    if(current) current->read_unlock(cpuid);
+                    if(block!=current) read_unlock(current->lock, cpuid);
                     current = current->next;
-                    if(current) current->read_lock(cpuid);
+                    if(current) read_lock(current->lock, cpuid);
 
                     // last in current block
                     if (value < current->vector[0]->value)
                     {
-                        block->read_lock(cpuid);
-                        // block->write_lock();
+                        if(block && block->r_lock_check(cpuid)) read_unlock(block->lock, cpuid);
+                        if(coin_flip[lvl]) write_lock(block->lock);
+                        else if(block!=current) read_lock(block->lock, cpuid);
                         blocks.push(block);
-                        
-                        if(current && block != current) current->read_unlock(cpuid);
+
+                        if(block!=current) read_unlock(current->lock, cpuid);
                         current = prev->down;
-                        if(current) current->read_lock(cpuid);
+                        if(current) read_lock(current->lock, cpuid);
+
                     }
                 }
                 else{ // last in this level
-                    current->read_lock(cpuid);
-                    // current->write_lock();
+                    if(current->r_lock_check(cpuid)) read_unlock(current->lock, cpuid);
+                    if(coin_flip[lvl]) write_lock(current->lock);
+                    else read_lock(current->lock, cpuid);
+
                     blocks.push(current);
                 }
-                if(current && block != current) current->read_unlock(cpuid);
+                if(block!=current && current->r_lock_check(cpuid)) read_unlock(current->lock, cpuid);
                 current = prev->down;
-                if(current) current->read_lock(cpuid);
+                if(current) read_lock(current->lock, cpuid);
             }
             block = current;
         }
-        // coinflip: H T
-        // block size: 1 1 1
-        if(coin_flip.size()<blocks.size()){
-            for(int i=coin_flip.size(); i<blocks.size();i++){
-                current = blocks.top();
-                current->read_unlock(cpuid);
-                // current->write_unlock();
-                blocks.pop();
-            }
-            // coin_flip.at(blocks.size()-1)=true;
-        }
-
         return std::make_pair(blocks, coin_flip);
     }
 
     void unlock_all(std::stack<Block *> list, int cpuid){
         if(!list.empty()){
         for(;!list.empty();list.pop()){
-            list.top()->read_unlock(cpuid);
-            list.top()->write_unlock();
+            if(list.size()==1) write_unlock(list.top()->lock);
+            else read_unlock(list.top()->lock, cpuid);
         }
         }
         return;
@@ -452,16 +381,14 @@ std::pair<std::stack<Block *>, std::vector<bool>> getBlockStack(int value, int c
 
         int cpuid = sched_getcpu();
 
-        srand(time(NULL)); // initialize random seed
         // std::stack<Block *> blocks = getBlockStack(my_args); //return block paths for value
         auto result = getBlockStack(value, cpuid);
         std::stack<Block *> blocks = result.first;
         std::vector<bool> coin_flip = result.second;
-        int lvl = blocks.size() - 1;
-        if(lvl<0) lvl =0;
+        int ind = 0;
 
         Block *lower = nullptr;
-
+        
         // building block from botton
         while (!blocks.empty())
         {
@@ -469,69 +396,57 @@ std::pair<std::stack<Block *>, std::vector<bool>> getBlockStack(int value, int c
             Block *block = blocks.top();
             blocks.pop();
 
-            // cout << "value : " << value << endl;
             for (unsigned int i = 0; i < block->vector.size(); i++)
             {
                 if (block->vector[i]->value > value)
                 { // in the middle of the vector
-                    // cout << value << " ((1) : " << block->vector[i]->value << endl;
-
-                    if (coin_flip[lvl])
+                    if (coin_flip[ind])
                     { // tail
-                    
-                        if(lower) lower->read_lock(cpuid);
                         param->block = block;
                         param->lower = lower;
                         param->offset= i;
-                        block->read_unlock(cpuid);
                         writer_insert_thread_routine((void *)param);
-                        if(lower) lower->read_unlock(cpuid);
-                        unlock_all(blocks,cpuid);
+                        write_unlock(block->lock);
+                        
+                        if(lower) read_unlock(lower->lock, cpuid);      
+                        unlock_all(blocks, cpuid);
+
                         return 1;
                     }
                     else
                     { // head
-                        // cout << value << " ((2) : " << block->vector[i]->value << endl;
-
                         r++;
                         // split and shrink block
                         std::vector<Node *> right;
                         right.push_back(new Node(value, lower));
-                        if(lower) lower->read_unlock(cpuid);
                         
                         for (unsigned int j = i; j < block->vector.size(); j++){
                             right.push_back(block->vector[j]);
                         }
-                        
-                        block->read_unlock(cpuid);
-                        block->write_lock();
-                        block->vector.resize(i);
-                        block->write_unlock();
 
+                        block->vector.resize(i);
                         Block *rightBlock = new Block(right, block->next);
-                        rightBlock->read_lock(cpuid);
                         block->next = rightBlock;
-                        rightBlock->read_unlock(cpuid);
 
                         // new level
                         if (blocks.empty())
                         {
-                            Block* cur_top = this->levels.back();
-                            if(cur_top) cur_top->read_lock(cpuid);
-                            
+                            Block* cur_top = levels.back();
+                            read_lock(cur_top->lock, cpuid);
+
                             Block *up = new Block(new Node(INT_MIN, block), nullptr);
-                            if(up) up->write_lock();
                             up->vector.push_back(new Node(value, block->next));
                             levels.push_back(up);
-                            if(up) up->write_unlock();
 
-                            if(cur_top) cur_top->read_unlock(cpuid);
+                            read_unlock(cur_top->lock, cpuid);
                         }
                         inserted = true;
-                                                
-                        lower = block->next;
-                        lower->read_lock(cpuid);
                         
+                        if(lower!=nullptr) read_unlock(lower->lock, cpuid);
+                        lower = block->next;
+                        read_lock(lower->lock, cpuid);
+                        read_unlock(block->lock, cpuid);
+
                         break;
                     }
                 }
@@ -539,71 +454,54 @@ std::pair<std::stack<Block *>, std::vector<bool>> getBlockStack(int value, int c
             if (!inserted)
             {
                 // at the end of the vector
-                if (coin_flip[lvl])
+                if (coin_flip[ind])
                 { // tail
-
-                    // cout << value << " ((3) : " << endl;
 
                     r = r + 1;
                     // block->vector.push_back(new Node(value, lower));
-                    // cout << value << " ((3)-1 : " << endl;
-                    
+
                     param->block = block;
                     param->lower = lower;
                     param->offset= -1;
-                    // cout << value << " ((3)-2 : " << endl;
-                    block->read_unlock(cpuid);
-                    writer_insert_thread_routine((void *)param);
-                    if(lower) lower->read_unlock(cpuid);
-                    unlock_all(blocks, cpuid);
 
-                    // cout << value << " ((3)-3 : " << endl;
-                    // cout << value << " ((3)-4 : " << endl;
+                    writer_insert_thread_routine((void *)param);
+                    write_unlock(block->lock);
+
+                    if(lower) read_unlock(lower->lock, cpuid);      
+                    unlock_all(blocks, cpuid);
                     return 1;
                 }
 
                 else
                 { // head
-                    block->read_unlock(cpuid);
-                    // cout << value << " (4) : "  << endl;
-
                     r = r + rand();
 
-                    if(lower) lower->read_lock(cpuid);
                     Block *newBlock = new Block(new Node(value, lower), block->next);
-                    if(lower) lower->read_unlock(cpuid);
-                    newBlock->read_lock(cpuid);
                     block->next = newBlock;
-                    // cout << value << " (4)-(1) : "  << endl;
 
                     // new level
                     if (blocks.empty())
                     {
-                        // cout << value << " (4)-(2) : "  << endl;
+                        Block* cur_top = levels.back();
+                        read_lock(cur_top->lock, cpuid);
 
-                        Block* cur_top = this->levels[this->levels.size()-1];
-                        if(cur_top) cur_top->read_lock(cpuid);
-                        // if(cur_top->next)
-                            // cout << "cpuid: "<< cpuid << " level size: "<< this->levels.size() <<": cur top back " << cur_top->next->vector.back()->value << endl;
-                        // if(block == cur_top) cur_top->read_unlock(cpuid);
                         Block *up = new Block(new Node(INT_MIN, block), nullptr);
-                        // up->write_lock();
                         up->vector.push_back(new Node(value, newBlock));
-                        newBlock->read_unlock(cpuid);
 
                         levels.push_back(up);
-                        if(cur_top) cur_top->read_unlock(cpuid);
+                        
+                        read_unlock(cur_top->lock, cpuid);
                     }
-                    newBlock->read_unlock(cpuid);
-
+                    if(lower!=nullptr) read_unlock(lower->lock, cpuid);
                     lower = newBlock;
+                    read_lock(lower->lock, cpuid);
+                    read_unlock(block->lock, cpuid);
                 }
             }
-            lvl--;
+            ind++;
         }
-        if(lower) lower->read_unlock(cpuid);
-        unlock_all(blocks,cpuid);
-        operations_completed.fetch_add(1, std::memory_order_relaxed);
+        if(lower) read_unlock(lower->lock, cpuid);      
+        unlock_all(blocks, cpuid);
         return 1;
     }
 
@@ -910,11 +808,12 @@ int main(int argc, char **argv) {
             args->list = list;
             args->thread_args = &writer_args[i];
             
-            // cout << "inserting " << writer_args[i].value << endl;
+            cout << "inserting " << writer_args[i].value << endl;
             if (pthread_create(&writers[i], NULL, InsertThread, (void *)args)){
                 perror("pthread_create");
                 return -1;
             }
+        list->print_list();
     }
 
     // for (int i = 0; i < nreaders; i++){
