@@ -125,7 +125,7 @@ public:
 
 };
 
-
+std::atomic<int> operations_completed(0);
 void timer_thread(int test_duration) {
     // Pause the thread for the duration of the test
     std::this_thread::sleep_for(std::chrono::seconds(test_duration));
@@ -292,7 +292,6 @@ public:
         // Destructor to free memory
         // ... (cleanup logic here)
     }
-
     std::pair<std::stack<Block *>, int> getBlockStack(int value)
     {
         int lvl = levels.size() - 1;
@@ -833,7 +832,6 @@ void parse_data_from_txt(string fname, data_entry * data){
 }
 
 
-std::atomic<int> operations_completed(0);
 
 int main(int argc, char **argv) {
     if (argc != 6) {
