@@ -265,7 +265,7 @@ void writer_insert_thread_routine(void *args) {
 
     //write output outside of critical region
     //*1000 to move to Milliseconds
-    my_args->duration[0] = (std::chrono::duration_cast<std::chrono::duration<double>>(end-start)).count()*1000;
+    my_args->duration[tid] = (std::chrono::duration_cast<std::chrono::duration<double>>(end-start)).count()*1000;
 
     return;
 }
@@ -428,7 +428,6 @@ std::pair<std::stack<Block *>, std::vector<bool>> getBlockStack(int value, int c
             }
             // coin_flip.at(blocks.size()-1)=true;
         }
-
         return std::make_pair(blocks, coin_flip);
     }
 
@@ -657,7 +656,7 @@ std::pair<std::stack<Block *>, std::vector<bool>> getBlockStack(int value, int c
         Node *prev_node;
         Block *block = levels[levels.size() - 1];
 
-        read_lock(block->lock, cpuid);
+        if(block) read_lock(block->lock, cpuid);
 
         while (block)
         {
@@ -669,9 +668,9 @@ std::pair<std::stack<Block *>, std::vector<bool>> getBlockStack(int value, int c
                     prev_node = node;
                     if (node == *std::prev(block->vector.end()))
                     {
-                        read_unlock(block->lock, cpuid);
+                        if(block) read_unlock(block->lock, cpuid);
                         block = block->next;
-                        read_lock(block->lock, cpuid);
+                        if(block) read_lock(block->lock, cpuid);
                         break;
                     }
                     else
@@ -681,14 +680,14 @@ std::pair<std::stack<Block *>, std::vector<bool>> getBlockStack(int value, int c
                 }
                 else if (node->value == key)
                 {
-                    read_unlock(block->lock, cpuid);
+                    if(block) read_unlock(block->lock, cpuid);
                     return true;
                 }
                 else if (key < node->value)
                 {
-                    read_unlock(block->lock, cpuid);
+                    if(block) read_unlock(block->lock, cpuid);
                     block = prev_node->down;
-                    read_lock(block->lock, cpuid);
+                    if(block) read_lock(block->lock, cpuid);
                     break;
                 }
                 // else if (i == 0) {return false;}
@@ -825,7 +824,7 @@ thread_args* parse_data_from_txt(int n, string fname, double * output){
 
         if(iss >> text >> number){
             args[i].thread_id = i;
-            args[i].duration = output+i;
+            args[i].duration = output;
             args[i].value = number;
         }
     }
@@ -851,7 +850,7 @@ int main(int argc, char **argv) {
     //output buffer for reader threads
     //each iteration outputs one double of duration per thread
     //this double represents time in milliseconds taken using std::chrono::high_resolution_clock
-    double * reader_output = (double *) malloc(nreaders*sizeof(double));
+    double * reader_output = (double *) malloc(sizeof(double));
 
     if (reader_output == NULL){
         perror("Malloc reader output");
@@ -875,7 +874,7 @@ int main(int argc, char **argv) {
     }
 
     //initialize writers/writer output in same fashion as readers.
-    double * writer_output = (double *) malloc(nwriters*sizeof(double));
+    double * writer_output = (double *) malloc(sizeof(double));
 
     if (writer_output == NULL){
         perror("Malloc writer output");
@@ -883,7 +882,7 @@ int main(int argc, char **argv) {
     }
 
     //init writer args + writers
-    thread_args * writer_args = (thread_args *) malloc(nreaders*sizeof(thread_args));
+    thread_args * writer_args = (thread_args *) malloc(nwriters*sizeof(thread_args));
     writer_args = parse_data_from_txt(nwriters, w_filename, writer_output);
 
     if (writer_args == NULL){
@@ -917,17 +916,17 @@ int main(int argc, char **argv) {
             }
     }
 
-    // for (int i = 0; i < nreaders; i++){
-    //     threadWrapper* args = (threadWrapper *) malloc(sizeof(threadWrapper));
+    for (int i = 0; i < nreaders; i++){
+        threadWrapper* args = (threadWrapper *) malloc(sizeof(threadWrapper));
 
-    //     args->list = list;
-    //     args->thread_args = &reader_args[i];
+        args->list = list;
+        args->thread_args = &reader_args[i];
 
-    //     if (pthread_create(&readers[i], NULL, ReadThread, (void *)args)){
-    //             perror("pthread_create");
-    //             return -1;
-    //     }
-    // }
+        if (pthread_create(&readers[i], NULL, ReadThread, (void *)args)){
+                perror("pthread_create");
+                return -1;
+        }
+    }
 
     // join threads
     // in reverse order to try and force a collision between reader/writer threads.
@@ -935,16 +934,15 @@ int main(int argc, char **argv) {
         pthread_join(writers[i], NULL);
     }
 
-    // for (int i = 0; i < nreaders; i++){
-    //     pthread_join(readers[i], NULL);
-    // }
-    list->print_list();
+    for (int i = 0; i < nreaders; i++){
+        pthread_join(readers[i], NULL);
+    }
+    // list->print_list();
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end_time - start_time;
     double throughput = operations_completed.load() / elapsed.count(); 
     std::cout << "Throughput: " << throughput << " operations per second." << std::endl;
-
 
     //finally, calculate and print stats.
     printf("Threads done, stats:\n");
@@ -963,17 +961,18 @@ int main(int argc, char **argv) {
 
     printf("Writers: min %f ms, max %f ms, mean %f ms, std_dev %f\n", writer_min, writer_max, writer_mean, writer_std_dev);
 
-
     //cleanup
-    // free(lock);
+    // list->free_locks();
 
-    free(reader_output);
-    free(reader_args);
-    free(readers);
+    // free(list);
 
-    free(writer_output);
-    free(writer_args);
-    free(writers);
+    // free(reader_output);
+    // free(reader_args);
+    // free(readers);
+
+    // free(writer_output);
+    // free(writer_args);
+    // free(writers);
 
     // free(items);
     
