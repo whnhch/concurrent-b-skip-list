@@ -3,6 +3,7 @@
 concurrent-b-skip-list
 
 ## How to build
+We tested our conde on University of Utah CADE
 ```
 make BSkipList
 ./BSkipList 100 100 "./test_data_TR/readers_2.txt" "./test_data_TR/writers2.txt"
