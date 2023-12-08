@@ -1,4 +1,6 @@
 # concurrent-b-skip-list
+Concurrent B SkipList implementation for 2023 Fall Semester CS 6530 Final Project
+
 ## Implementation of concurrent b skip list
 concurrent-b-skip-list
 
